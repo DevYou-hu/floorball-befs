@@ -274,9 +274,9 @@ function phLabel(n) {
   const m = n.match(/^([A-G])(\d)/); if (!m) return n;
   const L = m[1], k = +m[2];
   if ("ABC".includes(L)) return `${L} csop. ${k}.`;
-  if (L === "D") return `${9 + k}. m. győztese`;
-  if (L === "E") return `${9 + k}. m. vesztese`;
-  return `${12 + k}. m. ${L === "G" ? "győztese" : "vesztese"}`;
+  if (L === "D") return `${9 + k}. meccs győztese`;
+  if (L === "E") return `${9 + k}. meccs vesztese`;
+  return `${12 + k}. meccs ${L === "G" ? "győztese" : "vesztese"}`;
 }
 function shortName(n) { return isPlaceholder(n) ? phLabel(n) : (SHORT[n] || n); }
 function teamCell(name, side, win) {
