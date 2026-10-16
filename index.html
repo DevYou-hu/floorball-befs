@@ -251,8 +251,9 @@ function toTables(rows) {
       cur.push({ name: k, m: n(1), w: n(2), d: n(3), l: n(4), goals: (r[5] || "").replace(/\s/g, ""), gd: n(6), p: n(7) });
     } else if (!k) cur = null;
   }
-  // Megjelenítési sorrend ugyanaz, mint a táblázat továbbjutási képletében: SORT(P csökkenő, GK csökkenő).
-  for (const L in out) out[L] = out[L].map((s, i) => ({ ...s, i })).sort((a, b) => b.p - a.p || b.gd - a.gd || a.i - b.i);
+  // Megjelenítési sorrend ugyanaz, mint a táblázat továbbjutási képletében: SORT(P, GK, rúgott gól – mind csökkenő).
+  const gf = s => parseInt(s.goals, 10) || 0;
+  for (const L in out) out[L] = out[L].map((s, i) => ({ ...s, i })).sort((a, b) => b.p - a.p || b.gd - a.gd || gf(b) - gf(a) || a.i - b.i);
   out.note = note;
   return out;
 }
