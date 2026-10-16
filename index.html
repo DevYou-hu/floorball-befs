@@ -273,6 +273,8 @@ function phLabel(n) {
 function nowMinutes() { const d = new Date(); return d.getHours() * 60 + d.getMinutes(); }
 function liveMatch() {
   const n = nowMinutes();
+  // Csak a torna napján: ha még egy eredmény sincs, a 9:10-es nyitómeccs után nem jelölünk élőt.
+  if (!MATCHES.some(played) && n > MATCHES[0].minutes + SLOT_MIN) return null;
   return MATCHES.find(m => !played(m) && n >= m.minutes && n < m.minutes + SLOT_MIN);
 }
 
