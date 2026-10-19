@@ -109,6 +109,15 @@ h2 { font: 800 22px/1 var(--display); text-transform: uppercase; letter-spacing:
 .score { font: 700 20px/1 var(--display); min-width: 54px; text-align: center; padding: 6px 8px; border-radius: 8px; background: var(--soft); }
 .score.open { color: var(--muted); font-size: 16px; }
 .ph { color: var(--muted); font-style: italic; }
+.score.live { background: transparent; border: 2px dashed var(--accent); color: var(--accent); font-style: italic; }
+.livetag { font: 600 11px/1 var(--body); font-style: normal; color: var(--accent); letter-spacing: .02em; text-transform: none; white-space: nowrap; }
+h2 .livetag { font-size: 12px; vertical-align: middle; }
+.spot .sc.livesc { color: var(--accent); font-style: italic; border-bottom: 3px dashed var(--accent); }
+.spot.final .top3 { list-style: none; margin: 10px 0 12px; padding: 0; display: grid; gap: 6px; }
+.spot.final .top3 li { display: grid; grid-template-columns: 34px 1fr; align-items: baseline; }
+.spot.final .rk { font: 800 24px/1 var(--display); color: var(--accent); }
+.spot.final .t { text-align: left; font: 700 20px/1.15 var(--display); text-transform: uppercase; min-width: 0; overflow-wrap: anywhere; }
+.spot .more { font: 700 14px/1 var(--display); letter-spacing: .04em; text-transform: uppercase; background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 8px; padding: 9px 12px; cursor: pointer; }
 
 /* Tabellák */
 .tbl { background: var(--surface); border-radius: 14px; overflow-x: auto; }
@@ -187,7 +196,7 @@ const SHEET_ID = "1fF216QfCj-1owzEvjVfQkF4BWlRJUbqYuBZFTyCUyAE";
 // Minden a táblázat saját képleteiből jön, az oldal semmit nem számol újra.
 // Külön tartományok, mert a gviz a vegyes típusú oszlopokban kinullázza a kisebbségi típust.
 const csvUrl = range => `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&headers=0&gid=0&range=${range}`;
-const RANGES = { matches: "B6:I36", tables: "K6:R35", final: "K38:P46" };
+const RANGES = { matches: "B6:I37", tables: "K6:R35", final: "K38:P46" };
 const REFRESH_MS = 30000;
 const SLOT_MIN = 20;                       // 15 perc játék + 5 perc csere
 
@@ -311,36 +320,66 @@ function teamCell(name, side, win) {
 }
 
 const MATCH_DAY = "2026-10-17";            // a torna napja (helyi idő)
-function isMatchDay() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}` === MATCH_DAY; }
+let CEREMONY = null;                       // eredményhirdetés percben; a Sheet „EREDMÉNYHIRDETÉS” sorából
+const pad = x => String(x).padStart(2, "0");
+function dayState() {                      // "elotte" | "nap" | "utana"
+  const d = new Date(), k = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return k < MATCH_DAY ? "elotte" : k > MATCH_DAY ? "utana" : "nap";
+}
 function nowMinutes() { const d = new Date(); return d.getHours() * 60 + d.getMinutes(); }
-function liveMatch() {
-  const n = nowMinutes();
-  if (!isMatchDay()) return null;
-  return MATCHES.find(m => !played(m) && n >= m.minutes && n < m.minutes + SLOT_MIN);
+const ceremonyMin = () => CEREMONY ?? (MATCHES.length ? MATCHES[MATCHES.length - 1].minutes + SLOT_MIN : 24 * 60);
+const fmtMin = m => `${Math.floor(m / 60)}:${pad(m % 60)}`;
+
+// Egy meccs „fut”, amíg a következő el nem kezdődik (az időpontja el nem jön, vagy eredmény nem kerül rá).
+// Az utolsó meccs az eredményhirdetésig fut. Futó meccs eredménye még változhat.
+function runningMatch() {
+  if (dayState() !== "nap") return null;
+  const n = nowMinutes(), ms = [...MATCHES].sort((a, b) => a.minutes - b.minutes || a.no - b.no);
+  for (let i = ms.length - 1; i >= 0; i--) {
+    const m = ms[i], next = ms[i + 1];
+    if (n < m.minutes) continue;
+    if (next ? (played(next) || n >= next.minutes) : n >= ceremonyMin()) return null;
+    return m;
+  }
+  return null;
+}
+const isLive = m => { const r = runningMatch(); return !!r && r.no === m.no; };
+const ceremonyReached = () => dayState() === "utana" || (dayState() === "nap" && nowMinutes() >= ceremonyMin());
+
+function podiumTop() {
+  const top = FINAL.slice(0, 3).filter(f => !finalPending(f.team));
+  if (top.length < 3) return "";
+  return `<div class="spot final"><div class="lbl"><b>Végeredmény</b><span>${fmtMin(ceremonyMin())} · eredményhirdetés</span></div>
+    <ol class="top3">${top.map((f, i) => `<li><span class="rk num">${i + 1}.</span><span class="t">${esc(f.team)}</span></li>`).join("")}</ol>
+    <button type="button" class="more" data-goto="vegeredmeny">Teljes végeredmény</button></div>`;
 }
 
 function renderSpot() {
-  const live = liveMatch();
-  const next = live || MATCHES.find(m => !played(m));
   const el = $("spot");
-  if (!next) { el.innerHTML = `<div class="spot"><div class="lbl"><b>Vége a tornának</b></div><div class="stake">Eredményhirdetés és díjátadó 17:10-kor. A végeredményt a harmadik fülön találod.</div></div>`; return; }
+  if (ceremonyReached()) {
+    const p = podiumTop();
+    if (p) { el.innerHTML = p; return; }
+  }
+  const live = runningMatch();
+  const next = live || MATCHES.find(m => !played(m) && (dayState() !== "nap" || m.minutes > nowMinutes()));
+  if (!next) { el.innerHTML = `<div class="spot"><div class="lbl"><b>Vége a tornának</b></div><div class="stake">Eredményhirdetés és díjátadó ${fmtMin(ceremonyMin())}-kor. A végeredményt a harmadik fülön találod.</div></div>`; return; }
   const name = n => esc(shortName(n));
+  const sc = live && played(live) ? `<div class="sc livesc">${live.hg}:${live.ag}</div>` : `<div class="sc">–</div>`;
   el.innerHTML = `<div class="spot">
     <div class="lbl"><b>${live ? "● Most a pályán" : "Következő meccs"}</b><span>${next.no}. meccs · ${esc(next.time)}</span></div>
-    <div class="teams"><div class="t">${name(next.home)}</div><div class="sc">–</div><div class="t">${name(next.away)}</div></div>
-    <div class="stake">${esc(next.round)} · ${esc(next.stake)}</div></div>`;
+    <div class="teams"><div class="t">${name(next.home)}</div>${sc}<div class="t">${name(next.away)}</div></div>
+    <div class="stake">${live ? "Az eredmény még változhat · " : ""}${esc(next.round)} · ${esc(next.stake)}</div></div>`;
 }
 
 function matchList(ms) {
-  const live = liveMatch();
   return `<div class="list">${ms.map(m => {
-    const p = played(m);
-    const cls = ["m", (isMine(m.home) || isMine(m.away)) ? "mine" : "", live && live.no === m.no ? "now" : ""].join(" ");
+    const p = played(m), live = isLive(m);
+    const cls = ["m", (isMine(m.home) || isMine(m.away)) ? "mine" : "", live ? "now" : ""].join(" ");
     return `<div class="${cls}">
-      <div class="meta"><span><b class="num">${esc(m.time)}</b> · ${m.no}. meccs</span><span>${esc(m.stake)}</span></div>
-      <div class="vs">${teamCell(m.home, "h", p && m.hg > m.ag)}
-        <span class="score num${p ? "" : " open"}">${p ? `${m.hg}:${m.ag}` : "–"}</span>
-        ${teamCell(m.away, "a", p && m.ag > m.hg)}</div></div>`;
+      <div class="meta"><span><b class="num">${esc(m.time)}</b> · ${m.no}. meccs${live ? ` <em class="livetag">● élő, még változhat</em>` : ""}</span><span>${esc(m.stake)}</span></div>
+      <div class="vs">${teamCell(m.home, "h", p && !live && m.hg > m.ag)}
+        <span class="score num${p ? "" : " open"}${live ? " live" : ""}">${p ? `${m.hg}:${m.ag}` : "–"}</span>
+        ${teamCell(m.away, "a", p && !live && m.ag > m.hg)}</div></div>`;
   }).join("")}</div>`;
 }
 
@@ -350,12 +389,13 @@ function renderMatches() {
     <h2>Alapszakasz</h2><p class="sub">Három 3 csapatos csoport, mindenki mindenkivel.</p>${matchList(by("alap"))}
     <h2>Keresztjáték és kvalifikáció</h2><p class="sub">A csoportok 2–3. helyezettjei keresztben játszanak, a győztesek a csoportelsőkkel kvalifikálnak.</p>${matchList(by("kozep"))}
     <h2>Helyosztók</h2><p class="sub">Három hármas csoport: felsőház (1–3.), középház (4–6.), alsóház (7–9.).</p>${matchList(by("hely"))}
-    <p class="ceremony">17:10 · Eredményhirdetés és díjátadó</p>`;
+    <p class="ceremony">${fmtMin(ceremonyMin())} · Eredményhirdetés és díjátadó</p>`;
 }
 
-function table(title, sub, rows, marks) {
+function table(title, sub, rows, marks, grp) {
   if (!rows || !rows.length) return `<h2>${title}</h2><p class="sub">Betöltés…</p>`;
-  return `<h2>${title}</h2>${sub ? `<p class="sub">${sub}</p>` : ""}<div class="tbl"><table class="num">
+  const r = runningMatch(), live = r && grp && r.group === grp;
+  return `<h2>${title}${live ? ` <em class="livetag">● élő meccs, még változhat</em>` : ""}</h2>${sub ? `<p class="sub">${sub}</p>` : ""}<div class="tbl"><table class="num">
     <thead><tr><th></th><th>Csapat</th><th>M</th><th>Gy</th><th>D</th><th>V</th><th>Gól</th><th>GK</th><th>P</th></tr></thead><tbody>
     ${rows.map((s, i) => `<tr class="${isMine(s.name) ? "mine" : ""}"><td class="pos">${marks ? `<span class="q" style="background:${marks[i]}"></span>` : ""}${i + 1}</td>
       <td class="tn${isPlaceholder(s.name) ? " ph" : ""}">${esc(isPlaceholder(s.name) ? phLabel(s.name) : s.name)}</td>
@@ -367,22 +407,28 @@ function renderTables() {
   const T = TABLES;
   const marks = ["var(--win)", "var(--accent)", "var(--accent)"];
   $("p-tabellak").innerHTML = `
-    ${["A", "B", "C"].map(L => table(`${L} csoport`, "", T[L], marks)).join("")}
+    ${["A", "B", "C"].map(L => table(`${L} csoport`, "", T[L], marks, L)).join("")}
     <div class="legend"><span><span class="q" style="background:var(--win)"></span>csoportelső → kvalifikáció</span><span><span class="q" style="background:var(--accent)"></span>2–3. hely → keresztjáték</span></div>
-    ${table("Felsőház", "1–3. helyért", T.G)}
-    ${table("Középház", "4–6. helyért", T.F)}
-    ${table("Alsóház", "7–9. helyért", T.E)}
+    ${table("Felsőház", "1–3. helyért", T.G, null, "G")}
+    ${table("Középház", "4–6. helyért", T.F, null, "F")}
+    ${table("Alsóház", "7–9. helyért", T.E, null, "E")}
     ${T.note ? `<p class="note">${esc(T.note)}</p>` : ""}`;
+}
+
+// Ha a csapat helyosztó csoportjában épp fut meccs, a helyezése még nem végleges.
+function liveGroupOf(team) {
+  const r = runningMatch(); if (!r || r.phase !== "hely") return false;
+  return MATCHES.some(m => m.phase === "hely" && m.group === r.group && (m.home === team || m.away === team));
 }
 
 function renderFinal() {
   const html = FINAL.length ? FINAL.map((f, i) => {
-    const rank = i + 1, known = !finalPending(f.team);
+    const rank = i + 1, known = !finalPending(f.team) && !liveGroupOf(f.team);
     return `<div class="pl${rank <= 3 ? " medal" : ""}${known && isMine(f.team) ? " mine" : ""}"><div class="rk num">${rank}.</div>
       <div><div class="tn${known ? "" : " ph"}">${known ? esc(f.team) : "még nem dőlt el"}</div><div class="br">${esc(f.branch)}</div></div></div>`;
   }).join("") : `<div class="pl"><div></div><div class="tn ph">Betöltés…</div></div>`;
-  $("p-vegeredmeny").innerHTML = `<h2>Végeredmény</h2><p class="sub">A szervezők táblázatából, amint egy helyosztó csoport lezárult.</p><div class="podium">${html}</div>
-    <p class="ceremony">17:10 · Eredményhirdetés és díjátadó</p>`;
+  $("p-vegeredmeny").innerHTML = `<h2>Végeredmény</h2><p class="sub">A szervezők táblázatából, amint egy helyosztó csoport utolsó meccse véget ért.</p><div class="podium">${html}</div>
+    <p class="ceremony">${fmtMin(ceremonyMin())} · Eredményhirdetés és díjátadó</p>`;
 }
 
 function renderTeamPicker() {
@@ -404,6 +450,9 @@ function renderStatus() {
 }
 
 function render() {
+  if (ceremonyReached() && FINAL.length && !finalPending(FINAL[0].team) && store.get("fk-final-" + MATCH_DAY) !== "1") {
+    tab = "vegeredmeny"; store.set("fk-final-" + MATCH_DAY, "1");
+  }
   renderSpot(); renderMatches(); renderTables(); renderFinal(); renderStatus();
   for (const b of document.querySelectorAll(".tabs button")) b.setAttribute("aria-selected", b.dataset.tab === tab);
   for (const id of ["meccsek", "tabellak", "vegeredmeny"]) $("p-" + id).hidden = id !== tab;
@@ -418,10 +467,13 @@ async function load() {
     };
     const [m, t, f] = await Promise.all([get(RANGES.matches), get(RANGES.tables), get(RANGES.final)]);
     const ms = toMatches(m), tb = toTables(t), fi = toFinal(f);
+    const cer = m.map(r => r.join(" ")).find(x => /eredményhirdetés/i.test(x));
+    const cm = cer && cer.match(/(\d{1,2})[:.](\d{2})/);
+    if (cm) CEREMONY = +cm[1] * 60 + +cm[2];
     if (ms.length < 24 || fi.length < 9) throw new Error("hiányos adat");
     MATCHES = ms; TABLES = tb; FINAL = fi; failed = false;
     lastOk = new Date().toLocaleTimeString("hu-HU", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-    store.set("fk-cache2", JSON.stringify({ ms, tb, fi, lastOk }));
+    store.set("fk-cache2", JSON.stringify({ ms, tb, fi, lastOk, cer: CEREMONY }));
   } catch (e) {
     failed = true;
   }
@@ -429,7 +481,7 @@ async function load() {
 }
 
 // Indítás: előbb a gyorsítótárból, aztán élőben.
-try { const c = JSON.parse(store.get("fk-cache2") || "null"); if (c && c.ms) { MATCHES = c.ms; TABLES = c.tb || {}; FINAL = c.fi || []; lastOk = c.lastOk; } } catch {}
+try { const c = JSON.parse(store.get("fk-cache2") || "null"); if (c && c.ms) { MATCHES = c.ms; TABLES = c.tb || {}; FINAL = c.fi || []; lastOk = c.lastOk; CEREMONY = c.cer ?? null; } } catch {}
 renderTeamPicker(); render(); load();
 setInterval(load, REFRESH_MS);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) load(); });
@@ -438,6 +490,12 @@ document.querySelector(".tabs").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b) return;
   tab = b.dataset.tab; store.set("fk-tab", tab); render(); window.scrollTo({ top: $("spot").offsetTop, behavior: "smooth" });
 });
+$("spot").addEventListener("click", e => {
+  const b = e.target.closest("[data-goto]"); if (!b) return;
+  tab = b.dataset.goto; store.set("fk-tab", tab); render(); window.scrollTo({ top: document.querySelector("nav").offsetTop, behavior: "smooth" });
+});
+// Az idő múlásával is frissüljön a „mi fut most” akkor is, ha nincs új adat.
+setInterval(render, 60000);
 $("team").addEventListener("change", e => { mine = e.target.value; store.set("fk-team", mine); render(); });
 </script>
 </body>
